@@ -15,41 +15,35 @@ ABOUT_NEWSPIPE = """
 newspipe.py - version %s revision %s, Copyright (C) 2003-%s \n%s
 """%(__version__, __revision_number__, __date__.split('-')[0], __author__)
 
-#import psyco
-#psyco.full()
 
+import os, sys, os.path
 import ConfigParser
 from hashlib import md5
 from time import sleep, time
-import os, sys, os.path
-from cache import *
 from datetime import datetime, timedelta
+from cache import *
 from pprint import pprint
 from opml import *
 from pickle import load, dump
 import smtplib
 import re
-from htmlentitydefs import entitydefs
+from htmlentitydefs import  *
 from difflib import SequenceMatcher
 import email.Utils
 import email.Header
+from email import message_from_string
 import Queue
-from htmlentitydefs import  *
 import MimeWriter
 import mimetools
 import cStringIO
 import base64
 import urlparse
 import traceback
-import sys
-import urllib
-import urllib2
+import socket, urllib, urllib2
+from urllib2 import URLError
 import logging
 import logging.handlers
-from urllib2 import URLError
-from email import message_from_string
 import gc
-import socket
 
 try:
     import threading as _threading
