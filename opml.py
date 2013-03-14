@@ -6,7 +6,7 @@ __revision__ = "$Revision: 1.5 $"
 __revision_number__ = __revision__.split()[1]
 __url__ = "https://newspipe.sourceforge.net"
 __author__ = "Ricardo M. Reyes <reyesric@ufasta.edu.ar>"
-__id__ = "$Id: opml.py,v 1.5 2004/12/14 02:22:07 reyesric Exp $"
+__maintainer__ = "Rui Carmo"
 
 from pprint import pprint
 import xml.dom.minidom
@@ -20,119 +20,112 @@ def getText(nodelist):
             rc = rc + node.data
     return rc
 
-def CrearDiccionario(raiz):
+def to_dict(root):
     result = {}
 
-    if raiz.getElementsByTagName ('outline'):
+    if root.getElementsByTagName ('outline'):
         outline = True
     else:
         outline = False
-    # end if
 
-    for attr, value in raiz.attributes.items():
+    for attr, value in root.attributes.items():
         result[attr] = value
-    # end for
 
     if outline:
         result[u'childs'] = {}
-        for hijo in [x for x in raiz.childNodes if x.nodeName == 'outline']:
-            attribute = hijo.attributes.get('title', hijo.attributes.get('text', None))
+        for child in [x for x in root.childNodes if x.nodeName == 'outline']:
+            attribute = child.attributes.get('title', child.attributes.get('text', None))
             if attribute:
-                nombre = attribute.value
+                name = attribute.value
             else:
-                nombre = ''
+                name = ''
                 
-            if nombre in result[u'childs'].keys():
+            if name in result[u'childs'].keys():
                 i = 1
-                original = nombre
-                nombre = original + str(i)
-                while nombre in result[u'childs'].keys():
+                original = name
+                name = original + str(i)
+                while name in result[u'childs'].keys():
                     i += 1
-                    nombre = original + str(i)
+                    name = original + str(i)
                 # end while
-            # end if
-            result[u'childs'][nombre] = CrearDiccionario(hijo)
-        # end for
+    
+            result[u'childs'][name] = to_dict(child)
+
     else:
-        for node in raiz.childNodes:
+        for node in root.childNodes:
             result[node.nodeName] = getText(node.childNodes)
-        # end for
-    # end if
+
 
     return result
-# end def    
+   
 
-def ParseOPML(archivo):
+def ParseOPML(data):
 
     result = {}
 
-    dom = xml.dom.minidom.parse(archivo)
+    dom = xml.dom.minidom.parse(data)
 
     node = dom.getElementsByTagName('opml')[0]
-    result[u'opml'] = {u'head':CrearDiccionario(node.getElementsByTagName('head')[0]), 
-                       u'body':CrearDiccionario(node.getElementsByTagName('body')[0])}
+    result[u'opml'] = {u'head':to_dict(node.getElementsByTagName('head')[0]), 
+                       u'body':to_dict(node.getElementsByTagName('body')[0])}
 
-    #result = CrearDiccionario(dom)
+    #result = to_dict(dom)
 
     dom.unlink()
 
     return result
-# end def    
+   
 
-def ProcesarRama(rama, resultados, antecesores, valores_heredados):
+def handle_branch(rama, resultados, antecesores, valores_heredados):
     valores = {}
     for key in rama.keys():
         if key != 'childs':
             valores[key] = rama[key]
-        # end if        
-    # end for
+        
 
     for attr, value in valores_heredados.items():
         if not attr in valores.keys():
             valores[attr] = value
-        # end if
-    # end for
+
 
     if 'childs' in rama.keys():
-        hijos = rama['childs']
-        for hijo in hijos.keys():
-            ProcesarRama (hijos[hijo], resultados, antecesores + [hijo,], valores)
-        # end for
+        children = rama['childs']
+        for child in children.keys():
+            handle_branch (children[child], resultados, antecesores + [child,], valores)
+
     else:
         if antecesores.__len__() > 1:
             valores[u'path'] = '/' + u'/'.join(antecesores[:-1])
         else:
             valores[u'path'] = '/'
-        # end if
-        resultados += [valores,]
-    # end if
-# end def    
 
-def ListToDict(lista):
+        resultados += [valores,]
+   
+
+def ListToDict(items):
     result = {}
 
-    for attr, value in lista:
+    for attr, value in items:
         result[attr] = value.strip()
-    # end for
 
     return result
-# end def    
+   
 
-def AplanarArbol(arbol, defaults=None):
-    lista = []
+def flatten_tree(tree, defaults=None):
+    items = []
 
-    ProcesarRama(arbol['opml']['body'], lista, [], {})
+    handle_branch(tree['opml']['body'], items, [], {})
 
-    result = {'head':ListToDict(arbol['opml']['head'].items()),
-              'body':lista}
+    result = {'head':ListToDict(tree['opml']['head'].items()),
+              'body':items}
             
     # add an index value to each item            
-    for i, each in enumerate(lista):
+    for i, each in enumerate(items):
         each[u'index'] = unicode(str(i))
                   
     # add the default values to those item that are not complete
     if defaults:
-        for each in lista:
+        for each in items:
             for key,value in defaults.items():
                 if not isinstance(key, unicode):
                     key = unicode(key)
@@ -142,18 +135,18 @@ def AplanarArbol(arbol, defaults=None):
                     each[key] = value
 
     return result
-# end def  
+ 
 
-entidades = {}
+entities = {}
 for key,value in entitydefs.items():
-    entidades[unicode(value, 'latin1')] = unicode(key)
+    entities[unicode(value, 'latin1')] = unicode(key)
 # end for
 
 def escape (text):
     aux = []
     for each in text:
-        if each in entidades.keys():
-            aux.append ('&'+entidades[each]+';')
+        if each in entities.keys():
+            aux.append ('&'+entities[each]+';')
         else:
             aux.append (each)
     return ''.join(aux)
@@ -193,4 +186,4 @@ def generarOPML (feedList):
     return doc.toprettyxml(encoding='utf-8')
 
 if __name__ == '__main__':
-    pprint (AplanarArbol(ParseOPML('test.opml')))
+    pprint (flatten_tree(ParseOPML('test.opml')))
