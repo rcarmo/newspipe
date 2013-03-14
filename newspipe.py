@@ -31,10 +31,7 @@ from htmlentitydefs import  *
 from difflib import SequenceMatcher
 import email.Utils
 import email.Header
-from email import message_from_string
 import Queue
-import MimeWriter
-import mimetools
 import cStringIO
 import base64
 import urlparse
@@ -103,163 +100,7 @@ CONFIG_DEFAULTS = {
 
 DEBUG = False
 
-class MyLog:
-    debug_memory = 0 # include memory information in debug
-    cache = 2        # keep mem stats for "cache" seconds
 
-    h = None         # file handler
-    result = None    # memory string
-    lasttime = None  # last access to the file
-
-    #def die(self): self.h.close()
-
-    def memory(self):
-        # /proc/self/status is only available on Linux)
-        if self.debug_memory and sys.platform.lower().startswith('linux2'):
-            if not self.lasttime:
-                self.lasttime = time.time() - self.cache - 1
-            if self.lasttime + self.cache >= time.time():
-                return self.result
-
-            if not self.h:
-                self.h=file("/proc/self/status")
-            else:
-                self.h.seek(0)
-            x=self.h.read(1024)
-            result = ""
-            for l in x.split("\n"):
-                if l[0:2] != "Vm": continue
-                l = l.replace(" kB", "")
-                l = l.replace(" ", "")
-                l = l.replace("\t", "")
-                l = l.replace(":", ": ")
-                result = result + l + ","
-        
-            if len(result) > 1:
-                self.result = result
-                result = result[:-1]
-            else:
-                result = self.result
-            result = "[" + result + "] "
-            return result
-        else:
-          return ''
-    
-
-
-    def debug(self, msg, *args, **kwargs):
-        msg = self.memory() + msg
-        log.debug(msg, *args, **kwargs)
-    def info(self, msg, *args, **kwargs):
-        msg = self.memory() + msg
-        log.info(msg, *args, **kwargs)
-    def warning(self, msg, *args, **kwargs):
-        msg = self.memory() + msg
-        log.warning(msg, *args, **kwargs)
-    def exception(self, msg, *args, **kwargs):
-        msg = self.memory() + msg
-        log.exception(msg, *args, **kwargs)
-    def error(self, msg, *args, **kwargs):
-        msg = self.memory() + msg
-        log.error(msg, *args, **kwargs)
-
-
-def LogFile(stderr=True, name='default', location='.', debug=False):
-    if not os.path.exists(location):
-        os.makedirs(location)
-
-    logger = logging.getLogger(name)
-    hdlr = logging.handlers.RotatingFileHandler(os.path.join(location, name+'.log'), maxBytes=1024*500, backupCount=10)
-    formatter = logging.Formatter('%(asctime)s %(thread)d %(levelname)-10s %(message)s')
-    hdlr.setFormatter(formatter)
-    logger.addHandler(hdlr)
-
-    if stderr:
-        hdlr = logging.StreamHandler(sys.stderr)
-        hdlr.setFormatter(formatter)
-        logger.addHandler(hdlr)
-
-
-    if debug:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-
-
-    return logger
-
-def parseTime (text):
-    AM = 1
-    PM = 2
-    UNKNOWN = 3
-
-    text = text.lower()
-
-    if 'am' in text:
-        ampm = AM
-        text = text.replace('am', '')
-    elif 'pm' in text:
-        ampm = PM
-        text = text.replace('pm', '')
-    else:
-        ampm = UNKNOWN
-
-    text = text.strip()
-    slices = text.split(':')
-    if len(slices) == 1:
-        slices.append('0')
-
-    try:
-        hours = int(slices[0])
-        minutes = int(slices[1])
-    except ValueError:
-        return None
-
-    if ampm == PM:
-        hours = hours + 12
-
-    return (hours, minutes)
-
-    return None
-
-def parseTimeRange (text):
-    begin, end = None, None
-
-    text = text.strip()
-
-    separators = [x for x in (' , ; to = / | -').split(' ') if x]
-    separators.append(' ')
-
-    slices = None
-    for each in separators:
-        aux = text.split(each)
-        if len(aux) == 2:
-            slices = aux
-
-    if slices:
-        slices = [x.strip() for x in slices]
-        begin = parseTime(slices[0])
-        end = parseTime(slices[1])
-        if begin and end:
-            return (begin, end)
-
-    return None
-
-def checkTime (range):
-    n = datetime.now()
-    hours = n.hour
-    minutes = n.minute
-
-    begin = range[0][0]*100 + range[0][1]
-    end =   range[1][0]*100 + range[1][1]
-    current = hours*100 + minutes
-
-    if end < begin:
-        end += 2400
-
-    result = begin <= current <= end
-
-    return result
 
 def formatNumber (text):
     i = float(text)
@@ -270,324 +111,6 @@ def formatNumber (text):
     return '%0.2f MB' % m
 
 
-def intEnt(m):
-    m = int(m.groups(1)[0])
-    return unichr(m)
-
-def xEnt(m):
-    m = int(m.groups(1)[0], 16)
-    return unichr(m)
-
-def nameEnt(m):
-    m = m.groups(1)[0]
-    if m in entitydefs.keys():
-        return entitydefs[m].decode("latin1")
-    else:
-        return "&"+m+";"
-
-
-def expandNumEntities(text):
-    text = re.sub(r'&#(\d+);', intEnt, text)
-    text = re.sub(r'&#[Xx](\w+);', xEnt, text)
-    text = re.sub(r'&(.*?);', nameEnt, text)
-    return text
-
-def expandEntities(text):
-    text = text.replace("&lt;", "<")
-    text = text.replace("&gt;", ">")
-    text = text.replace("&quot;", '"')
-    text = text.replace("&ob;", "{")
-    text = text.replace("&cb;", "}")
-    text = text.replace("&middot;", "*")
-    text = re.sub("&[rl]squo;", "'", text)
-    text = re.sub("&[rl]dquo;", '"', text)
-    text = re.sub("&([aeiouAEIOU])(grave|acute|circ|tilde|uml|ring);", lambda m: m.groups(1)[0], text)
-    text = re.sub("&([cC])(cedil);", lambda m: m.groups(1)[0], text)
-    text = re.sub("&([n])(tilde);", lambda m: m.groups(1)[0], text)
-    text = re.sub(r'&#(\d+);', intEnt, text)
-    text = re.sub(r'&#[Xx](\w+);', xEnt, text)
-    text = re.sub("&(#169|copy);", "(C)", text)
-    text = re.sub("&mdash;", "--", text)
-    text = re.sub("&amp;", "&", text)
-    return text
-
-class TextDiff:
-    """Create diffs of text snippets."""
-
-    def __init__(self, source, target):
-        """source = source text - target = target text"""
-        self.separators = '"<>'
-        self.nl = "<NL>"
-        #self.delTag = "<span class='deleted'>%s</span>"
-        self.delTag = '<font color="#FF0000"><STRIKE>%s</STRIKE></font>'
-        #self.insTag = "<span class='inserted'>%s</span>"
-        self.insTag = '<font color="#337700"><b>%s</b></font>'
-        self.source = self.SplitHTML(source.replace("\n", "\n%s" % self.nl))
-        self.target = self.SplitHTML(target.replace("\n", "\n%s" % self.nl))
-        self.deleteCount, self.insertCount, self.replaceCount = 0, 0, 0
-        self.diffText = None
-        self.cruncher = SequenceMatcher(None, self.source, self.target)
-        self._buildDiff()
-
-    def SplitHTML (self, text):
-        version1 = re.compile('(<.+?>)').split(text)
-
-        version2 = []
-        for x in version1:
-            if re.compile('<.+>').search(x):
-                version2 += [x,]
-            else:
-                version2 += x.split()
-        
-    
-        return version2
-
-    def _buildDiff(self):
-        """Create a tagged diff."""
-        outputList = []
-        for tag, alo, ahi, blo, bhi in self.cruncher.get_opcodes():
-            if tag == 'replace':
-                # Text replaced = deletion + insertion
-                outputList.append(self.delTag % " ".join(self.source[alo:ahi]))
-                outputList.append(self.insTag % " ".join(self.target[blo:bhi]))
-                self.replaceCount += 1
-            elif tag == 'delete':
-                # Text deleted
-                outputList.append(self.delTag % " ".join(self.source[alo:ahi]))
-                self.deleteCount += 1
-            elif tag == 'insert':
-                # Text inserted
-                outputList.append(self.insTag % " ".join(self.target[blo:bhi]))
-                self.insertCount += 1
-            elif tag == 'equal':
-                # No change
-                outputList.append(" ".join(self.source[alo:ahi]))
-        diffText = " ".join(outputList)
-        diffText = " ".join(diffText.split())
-        self.diffText = diffText.replace(self.nl, "\n")
-
-    def getStats(self):
-        "Return a tuple of stat values."
-        return (self.insertCount, self.deleteCount, self.replaceCount)
-
-    def getDiff(self):
-        "Return the diff text."
-        aux = self.diffText
-        return aux
-
-def createhtmlmail (html, text, headers, images=None, rss_feed=None, link=None, encoding='utf-8'):
-    """Create a mime-message that will render HTML in popular
-    MUAs, text in better ones"""
-
-    global cache, log
-
-    if not isinstance(text, unicode):
-        text = text.decode('latin1')
-
-    if isinstance(text, unicode):
-        text = text.encode('utf-8')
-
-
-    if not isinstance(html, unicode):
-        html = html.decode('latin1')
-
-    if isinstance(html, unicode):
-        html = html.encode('utf-8')
-
-
-    out = cStringIO.StringIO() # output buffer for our message
-    htmlin = cStringIO.StringIO(html)
-    txtin = cStringIO.StringIO(text)
-    if rss_feed:
-        rssin = cStringIO.StringIO(rss_feed)
-
-
-    writer = MimeWriter.MimeWriter(out)
-    #
-    # set up some basic headers... we put subject here
-    # because smtplib.sendmail expects it to be in the
-    # message body
-    #
-
-    for x,y in headers:
-        writer.addheader(x, y.encode('utf-8'))
-
-    writer.addheader("MIME-Version", "1.0")
-    #
-    # start the multipart section of the message
-    # multipart/alternative seems to work better
-    # on some MUAs than multipart/mixed
-    #
-    writer.startmultipartbody("alternative")
-    writer.flushheaders()
-
-    #
-    # the plain text section
-    #
-    if(text != ""):
-        subpart = writer.nextpart()
-        subpart.addheader("Content-Transfer-Encoding", "quoted-printable")
-        pout = subpart.startbody("text/plain", [("charset", 'utf-8'), ("delsp", 'yes'), ("format", 'flowed')])
-        mimetools.encode(txtin, pout, 'quoted-printable')
-        pout.write (txtin.read())
-        txtin.close()
-
-    #
-    # start the html subpart of the message
-    #
-    if images:
-        htmlpart = writer.nextpart()
-        htmlpart.startmultipartbody("related")
-        subpart = htmlpart.nextpart()
-    else:
-        subpart = writer.nextpart()
-    subpart.addheader("Content-Transfer-Encoding", "quoted-printable")
-    #
-    # returns us a file-ish object we can write to
-    #
-    pout = subpart.startbody("text/html", [("charset", 'utf-8')])
-    mimetools.encode(htmlin, pout, 'quoted-printable')
-    htmlin.close()
-
-    if images:
-        for x in images:
-            try:
-                ext = 'gif'
-                path, filename = os.path.split(x['url'])
-                if filename:
-                    name, ext = os.path.splitext(filename)
-                    if ext:
-                        ext = ext[1:]
-
-                        if '?' in ext:
-                            ext = ext[:ext.find('?')]
-                    
-                
-            
-
-                if link:
-                    # if the url is relative, then add the link url to form an absolute address
-                    url_parts = urlparse.urlsplit(x['url'])
-                    if not url_parts[1]:
-                        if not url_parts[0].upper() == 'FILE:':
-                            x['url'] = urlparse.urljoin(link, x['url'])
-                    
-                
-            
-                x['url'] = x['url'].replace(' ', '%20')
-
-                retries = 0;
-                MAX_RETRIES = 3;
-                img_referer = link
-                resource = None
-                while retries < MAX_RETRIES:
-                    retries += 1
-
-                    # try to fetch the image.
-                    # in case of Timeout or URLError exceptions, retry up to 3 times
-                    try:
-                        resource = cache.urlopen(x['url'], max_age=999999, referer=img_referer, can_pipe=False)
-                    except HTTPError, e:
-                        # in case of HTTP error 403 ("Forbiden") retry without the Referer
-                        if e.code == 403 and img_referer:
-                            mylog.info ('HTTP error 403 downloading %s, retrying without the referer' % (x['url'],))
-                            img_referer = None
-                        else:
-                            raise
-                    
-                    except (socket.timeout, socket.error):
-                        mylog.info ('Timeout error downloading %s' % (x['url'],))
-                        if retries == MAX_RETRIES:
-                            raise
-                    
-                    except URLError, e:
-                        mylog.info ('URLError (%s) downloading %s' % (e.reason, x['url'],))
-                        if retries == MAX_RETRIES:
-                            raise
-                    
-                    except Exception:
-                        raise # any other exception, kick it up, to be handled later
-                    else:
-                        # if there's no exception, break the loop to continue
-                        # processing the image
-                        break
-                
-
-                    mylog.info ('Retrying, %d time' % retries);
-            
-
-                if not resource:
-                    raise Exception('Unknown problem')
-            
-
-                message = resource.info['Cache-Result']
-
-                mylog.debug (message + ' ' + x['url'])
-
-                info = resource.info
-                content_type = info['Content-Type']
-            
-
-                subpart = htmlpart.nextpart()
-                subpart.addheader("Content-Transfer-Encoding", "base64")
-                subpart.addheader("Content-ID", "<" + x['name'] + ">")
-                subpart.addheader("Content-Location", x['name'])
-                subpart.addheader("Content-Disposition", "inline; filename=\"" +x['filename'] + "\"" )
-                f = subpart.startbody(content_type, [["name", x['name']]])
-                b64 = base64.encodestring(resource.content.read())
-                f.write(b64)
-                image_ok = True  # the image was downloaded ok
-            except KeyboardInterrupt:
-                raise
-            except socket.timeout:
-                mylog.info ('Timeout error downloading %s' % (x['url'],))
-                image_ok = False
-            except HTTPError, e:
-                mylog.info ('HTTP Error %d downloading %s' % (e.code, x['url'],))
-                image_ok = False
-            except URLError, e:
-                mylog.info ('URLError (%s) downloading %s' % (e.reason, x['url'],))
-                image_ok = False
-            except OfflineError:
-                mylog.info ('Resource unavailable when offline (%s)' % x['url'])
-                image_ok = False
-            except Exception, e:
-                mylog.exception ('Error %s downloading %s' % (str(e), x['url'],))
-                image_ok = False
-        
-            if not image_ok:
-                x['url'] = 'ERROR '+x['url'] # arruino la url para que no se reemplace en el html
-        
-    
-        htmlpart.lastpart()
-
-
-    #
-    # the feed section
-    #
-
-    if rss_feed:
-        subpart = writer.nextpart()
-        subpart.addheader("Content-Transfer-Encoding", "quoted-printable")
-        pout = subpart.startbody("text/plain", [("charset", 'us-ascii'), ("Name", "rss_feed.xml")])
-        mimetools.encode(rssin, pout, 'quoted-printable')
-        rssin.close()
-
-
-    #
-    # Now that we're done, close our writer and
-    # return the message body
-    #
-    writer.lastpart()
-    msg_source = out.getvalue()
-    out.close()
-    return message_from_string (msg_source.encode(encoding, 'replace'))
-
-def createTextEmail(text, headers, encoding='utf-8'):
-    t = '\r\n'.join([x+': '+y for x,y in headers])
-    t += '\r\n\r\n'
-    t += text
-    return message_from_string(t.encode(encoding, 'replace'))
 
 
 def quitarEntitys (text):
@@ -626,33 +149,7 @@ post_history = {}
 feed_history = {}
 
 
-def getEntity(m):
-    v = int(m.groups(1)[0])
-    if v in codepoint2name.keys():
-        return '&'+codepoint2name[v]+';'
-    else:
-        return ''
 
-def SanitizeText (text):
-
-    text = text.replace('\n', ' ')
-
-    entitys = entitydefs
-    inverso = {}
-    for i,j in entitys.items():
-        inverso[j] = '&'+i+';'
-
-    chars = filter(lambda x: ord(x) >= 128, text)
-    if chars:
-        for c in chars:
-            if inverso.has_key(c):
-                text = text.replace(c, inverso[c])
-            else:
-                text = text.replace(c, '')
-
-
-    text = re.sub(r'&#(\d+);', getEntity, text)
-    return text
 
 
 def GetValue (x):
@@ -667,35 +164,6 @@ def GetValue (x):
         return ''
 
 
-entitydefs2 = {}
-for key,value in entitydefs.items():
-    entitydefs2[value] = key
-
-def fixEntities(text):
-    '''This function replaces special characters with &entities; '''
-    if not text:
-        return text
-
-
-    if not isinstance(text, unicode):
-        text = text.decode('latin1')
-
-    result = ''
-    for c in text:
-        if not (c in ('<', '>', '/', '"', "'", '=', '&')):
-            if c.encode("latin1", 'replace') in entitydefs2.keys():
-                rep = entitydefs2[c.encode("latin1", "replace")]
-                rep = '&'+rep+';'
-                result += rep
-            else:
-                result += c
-        
-        else:
-            result += c
-    
-
-
-    return result
 
 
 
@@ -709,15 +177,10 @@ html2text_lock = _threading.BoundedSemaphore()
 def makeHeader(text):
     if not text:
         text = ''
-
     if not isinstance(text, unicode):
         text = text.decode('latin1')
-
-
     if isinstance(text, unicode):
         text = text.encode('utf-8')
-
-
     try:
         if has_html2text:
             text = html2text(text).strip()
@@ -752,13 +215,7 @@ def getPlainText(html, links=True):
         plain_text = plain_text.decode('utf-8')
 
     return plain_text
-
-def md5text(text):
-    m = md5()
-    m.update (text)
-    return m.hexdigest()
-
-
+    
 class Item:
     def __init__(self, original, channel, encoding="utf-8", remove=None):
         global post_history
@@ -1055,80 +512,7 @@ class Item:
                 return createhtmlmail (html_version, text_version, headers, images, None, self.link, encoding)
 
 
-def ReadConfig():
-    from optparse import OptionParser
 
-    parser = OptionParser()
-    parser.add_option("-i", "--inifile", dest="inifile", help=".ini file with the configuration")
-    parser.add_option("-o", "--opml", dest="opml", help="the filename or URL of the OPML file with the list of feeds to check")
-    parser.add_option("-s", "--smtp_server", dest="smtp_server", help="fully qualified domain name or IP address of the SMTP server to send messages through")
-    parser.add_option("-e", "--sender", dest="sender", help="optional e-mail address to use as From: - overrides the OPML ownerEmail field.")
-    parser.add_option("-t", "--textonly", action="store_const", const="1", dest="textonly", help=" all the messages sent by newspipe will be sent in plaintext format, without any HTML")
-    parser.add_option("-l", "--log_console", action="store_const", const="1", dest="log_console", help="send logging output to the console and to the log file.")
-    parser.add_option("-c", "--check_online", dest="check_online", help="URL of a webpage that the program will try to fetch to determine if there is a network connection available")
-    parser.add_option("-d", "--sleep_time", dest="sleep_time", help="Number of minutes to wait before re-checking feeds")
-    parser.add_option("-b", "--batch", action="store_const", const="0", dest="sleep_time", help="process all feeds and exit inmediatly")
-    parser.add_option("-f", "--offline", action="store_const", const="1", dest="offline", help="the program won't try to fetch any data from the internet, using cached versions instead")
-    parser.add_option("-x", "--debug", action="store_const", const="1", dest="debug", help="log a lot of debug information")
-    parser.add_option("-w", "--workers", dest="workers", help="Number of threads to use simultaneusly")
-    parser.add_option("-m", "--multipart", action="store_const", const="on", dest="multipart", help=" include a plaintext version of item contents as well as an HTML version.")
-    parser.add_option("-p", "--can_pipe", action="store_const", const="1", dest="can_pipe", help="Allow the pipe:// protocol in urls")
-    parser.add_option("-u", "--encoding", dest="encoding", help="unicode encoding to use when composing the emails")
-    parser.add_option("-r", "--proxy", dest="proxy", help="addess and port of the proxy server to use")
-    parser.add_option("-a", "--threading", action="store_const", const="1", dest="threading", help="include threading headers in the emails")
-    parser.add_option("", "--subject", dest="subject", help="add a fixed text to the subject of every message")
-    parser.add_option("", "--smtp_authentication", action="store_const", const="0", dest="smtp_auth", help="authenticate with SMTP server")
-    parser.add_option("", "--smtp_auth_user", dest="smtp_user", help="SMTP username used for authentication")
-    parser.add_option("", "--smtp_auth_pass", dest="smtp_pass", help="SMTP password used for authentication")
-    parser.add_option("", "--send_method", dest="send_method", help="Method used to send the resulting emails. Possible values: SMTP, PROCMAIL, BOTH")
-    parser.add_option("", "--procmail", dest="procmail", help="Path of the procmail script, used when SEND_METHOD=PROCMAIL or BOTH")
-    parser.add_option("", "--reverse", action="store_const", const="1", dest="reverse", help="reverse the order of emails as they are sent")
-
-
-    (options, args) = parser.parse_args()
-
-    if options.inifile:
-        inifile = options.inifile
-    else:
-        source_path = os.path.split(sys.argv[0])[0]
-
-        for p in ('.', source_path):
-            inifile = os.path.join(p, 'newspipe.ini')
-            if os.path.exists(inifile):
-                break
-
-    if not os.path.exists(inifile):
-        raise ValueError ("Can't find the ini file at "+inifile)
-
-    ini = ConfigParser.ConfigParser()
-    ini.read(inifile)
-
-    result = {}
-    for attr in ini.options('NewsPipe'):
-        result[attr.lower()] = ini.get('NewsPipe', attr)
-
-
-    for key, value in CONFIG_DEFAULTS.items():
-        if not key in result.keys():
-            result[key] = value
-
-    for key in [x.dest for x in parser.option_list]:
-        if key:
-            value = getattr(options, key)
-            if value:
-                result[key] = value
-
-    if result['proxy']:
-        if not '://' in result['proxy']:
-            result['proxy'] = 'http://' + result['proxy']
-        proxy_support = urllib2.ProxyHandler({"http":result['proxy']})
-        opener = urllib2.build_opener(proxy_support)
-        urllib2.install_opener(opener)
-
-    if not (result['send_method'].lower() in ('smtp', 'procmail', 'both')):
-        raise ValueError ('The value of the parameter SEND_METHOD must be SMTP, PROCMAIL or BOTH')
-
-    return result
 
 
 def send_emails(msgs, method, server, auth, auth_user, auth_pass, procmail, reverse):
@@ -1229,6 +613,7 @@ def send_emails(msgs, method, server, auth, auth_user, auth_pass, procmail, reve
                 mylog.info ('%d emails sent successfully%s via PROCMAIL' % (count,note,))
     finally:
         socket.setdefaulttimeout (backup_timeout)    
+
 
 def group_items(items, titles, encoding, reverse):
     def cmpItems(x,y):
@@ -1407,34 +792,6 @@ def GrabarHistorico(dicc, name, extension):
     dicc['modified'] = False
 
 
-
-def CheckOnline(config):
-    if config.has_key('check_online'):
-        url = config['check_online']
-        try:
-            mylog.debug ('Checking online status (downloading '+url+')')
-            urllib2.urlopen(url)
-            mylog.debug ('Status: online')
-            return True
-        except:
-            mylog.debug ('Status: offline')
-            return False
-    else:
-        return True
-
-def GetHomeDir():
-    """ Returns the home directory of the current user."""
-
-    for name in ('appdata', 'HOME'):
-        result = os.environ.get(name, None)
-        if result:
-            return result
-    
-
-
-    # if it can't find the home directory trough environment vars, then
-    # return the path to this script.
-    return os.path.split(sys.argv[0])[0]
 
 class FeedWorker (_threading.Thread):
     def __init__(self, feeds_queue, email_queue, config, email_destino, movil_destino, semaforo):
@@ -1856,8 +1213,6 @@ def MainLoop():
 
 
 if __name__ == '__main__':
-    # print ABOUT_NEWSPIPE
-
     log = None
     mylog=MyLog()
 
