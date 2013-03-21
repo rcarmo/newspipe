@@ -1,5 +1,32 @@
+import os, sys
+from optparse import OptionParser
+import ConfigParser
+
+CONFIG_DEFAULTS = {
+    'textonly': '0',
+    'log_console': '0',
+    'sleep_time': '5',
+    'offline': '0',
+    'debug': '0',
+    'workers': '10',
+    'multipart': 'on',
+    'can_pipe': '0',
+    'encoding': 'utf-8',
+    'proxy': '',
+    'threading': '0',
+    'subject': '',
+    'priority' : '1',
+    'smtp_auth' : '0',
+    'smtp_user' : '',
+    'smtp_pass' : '',
+    'from_address' : '',
+    'send_method': 'smtp',
+    'procmail': '',
+    'reverse' : '0'
+}
+
+
 def ReadConfig():
-    from optparse import OptionParser
 
     parser = OptionParser()
     parser.add_option("-i", "--inifile", dest="inifile", help=".ini file with the configuration")

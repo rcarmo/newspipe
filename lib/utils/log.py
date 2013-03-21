@@ -1,3 +1,7 @@
+import os, sys
+import logging
+import logging.handlers
+
 class MyLog:
     debug_memory = 0 # include memory information in debug
     cache = 2        # keep mem stats for "cache" seconds
@@ -44,41 +48,44 @@ class MyLog:
 
     def debug(self, msg, *args, **kwargs):
         msg = self.memory() + msg
-        log.debug(msg, *args, **kwargs)
+        self.log.debug(msg, *args, **kwargs)
     def info(self, msg, *args, **kwargs):
         msg = self.memory() + msg
-        log.info(msg, *args, **kwargs)
+        self.log.info(msg, *args, **kwargs)
     def warning(self, msg, *args, **kwargs):
         msg = self.memory() + msg
-        log.warning(msg, *args, **kwargs)
+        self.log.warning(msg, *args, **kwargs)
     def exception(self, msg, *args, **kwargs):
         msg = self.memory() + msg
-        log.exception(msg, *args, **kwargs)
+        self.log.exception(msg, *args, **kwargs)
     def error(self, msg, *args, **kwargs):
         msg = self.memory() + msg
-        log.error(msg, *args, **kwargs)
+        self.log.error(msg, *args, **kwargs)
 
 
-def LogFile(stderr=True, name='default', location='.', debug=False):
-    if not os.path.exists(location):
-        os.makedirs(location)
+    def logFile(self, stderr=True, name='default', location='.', debug=False):
+        if not os.path.exists(location):
+            os.makedirs(location)
 
-    logger = logging.getLogger(name)
-    hdlr = logging.handlers.RotatingFileHandler(os.path.join(location, name+'.log'), maxBytes=1024*500, backupCount=10)
-    formatter = logging.Formatter('%(asctime)s %(thread)d %(levelname)-10s %(message)s')
-    hdlr.setFormatter(formatter)
-    logger.addHandler(hdlr)
-
-    if stderr:
-        hdlr = logging.StreamHandler(sys.stderr)
+        logger = logging.getLogger(name)
+        hdlr = logging.handlers.RotatingFileHandler(os.path.join(location, name+'.log'), maxBytes=1024*500, backupCount=10)
+        formatter = logging.Formatter('%(asctime)s %(thread)d %(levelname)-10s %(message)s')
         hdlr.setFormatter(formatter)
         logger.addHandler(hdlr)
 
+        if stderr:
+            hdlr = logging.StreamHandler(sys.stderr)
+            hdlr.setFormatter(formatter)
+            logger.addHandler(hdlr)
 
-    if debug:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
+
+        if debug:
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.INFO)
 
 
-    return logger
+        self.log = logger
+
+
+mylog = MyLog()
