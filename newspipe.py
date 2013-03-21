@@ -8,7 +8,7 @@ __version__ = "1.1.9"
 __date__ = "2005-07-03"
 __url__ = "http://newspipe.sourceforge.net"
 __author__ = "Ricardo M. Reyes <reyesric@ufasta.edu.ar>"
-__contributors__ = ["Rui Carmo <http://the.taoofmac.com/space/>", "Bruno Rodrigues <http://www.litux.org/blog/>"]
+__contributors__ = ["Rui Carmo <http://the.taoofmac.com/space/>", "Bruno Rodrigues <http://www.litux.org/blog/>", "Stéphane Puybareau <http://puyb.net/>"]
 __id__ = "$Id: newspipe.py,v 1.68 2006/01/22 22:02:37 reyesric Exp $"
 
 ABOUT_NEWSPIPE = """
@@ -17,29 +17,25 @@ newspipe.py - version %s revision %s, Copyright (C) 2003-%s \n%s
 
 
 import os, sys, os.path
-import ConfigParser
-from hashlib import md5
 from time import sleep, time
 from datetime import datetime, timedelta
-from cache import *
+from lib.cache import *
 from pprint import pprint
-from opml import *
+from lib.utils import *
+from lib.utils.opml import *
+from lib.utils.diff import *
+from lib.utils.cli import *
+from lib.utils.markup import *
+from lib.utils.mime import *
+from lib.utils.log import mylog
 from pickle import load, dump
 import smtplib
 import re
-from htmlentitydefs import  *
 from difflib import SequenceMatcher
 import email.Utils
 import email.Header
-import Queue
-import cStringIO
-import base64
-import urlparse
 import traceback
 import socket, urllib, urllib2
-from urllib2 import URLError
-import logging
-import logging.handlers
 import gc
 
 try:
@@ -75,29 +71,6 @@ OPML_DEFAULTS = {
     'remove': '',
 }
 
-CONFIG_DEFAULTS = {
-    'textonly': '0',
-    'log_console': '0',
-    'sleep_time': '5',
-    'offline': '0',
-    'debug': '0',
-    'workers': '10',
-    'multipart': 'on',
-    'can_pipe': '0',
-    'encoding': 'utf-8',
-    'proxy': '',
-    'threading': '0',
-    'subject': '',
-    'priority' : '1',
-    'smtp_auth' : '0',
-    'smtp_user' : '',
-    'smtp_pass' : '',
-    'from_address' : '',
-    'send_method': 'smtp',
-    'procmail': '',
-    'reverse' : '0'
-}
-
 DEBUG = False
 
 
@@ -111,10 +84,6 @@ def formatNumber (text):
     return '%0.2f MB' % m
 
 
-
-
-def quitarEntitys (text):
-    return re.sub(r'(&\D+?;)', '', text)
 
 
 class Channel:
@@ -133,14 +102,6 @@ class Channel:
     def NewItem(self, original, encoding="utf-8", remove=None):
         return Item(original, self, encoding, remove)
 
-
-def item_checksum(item):
-    """ Calculates the MD5 checksum of an rss item """
-    m = md5()
-    for x in item.values():
-        m.update (str(x))
-
-    return m.hexdigest()
 
 
 
@@ -297,11 +258,11 @@ class Item:
             self.subject += '...'
     
 
-        m = md5()
-        m.update (self.link.encode('utf-8', 'replace'))
-        m.update (channel.xmlUrl)
-        m.update (self.subject.encode('utf-8', 'replace'))
-        self.urlHash = m.hexdigest()
+        self.urlHash = md5text(
+                self.link.encode('utf-8', 'replace'),
+                channel.xmlUrl,
+                self.subject.encode('utf-8', 'replace')
+            )
 
         self.subject = self.subject
 
@@ -352,7 +313,7 @@ class Item:
         #return self.original.__repr__()
 
 
-    def GetEmail(self, from, recipient, format="multipart", encoding='utf-8', include_threading=False, subject_prefix=None, from_address=None):
+    def GetEmail(self, from_email, recipient, format="multipart", encoding='utf-8', include_threading=False, subject_prefix=None, from_address=None):
         global post_history
         template = """
     <p>
@@ -436,9 +397,9 @@ class Item:
         
     
 
-        from = self.creatorEmail
-        if from == None:
-            from = recipient[1]
+        from_email = self.creatorEmail
+        if from_email == None:
+            from_email = recipient[1]
     
 
         if subject_prefix:
@@ -450,7 +411,7 @@ class Item:
         if from_address:
             from_header = from_address
         else:
-            from_header = '"%s" <%s>' % (makeHeader(self.channel.title), from)
+            from_header = '"%s" <%s>' % (makeHeader(self.channel.title), from_email)
 
         headers = []
         headers.append(('From', from_header))
@@ -485,9 +446,7 @@ class Item:
 
         lastid = feed_history[self.channel.xmlUrl].get("lastid", "")
         if lastid == "":
-            m = md5()
-            m.update (self.channel.xmlUrl)
-            refid = "<" + m.hexdigest() + "@rss.example.com>"
+            refid = "<" + md5text(self.channel.xmlUrl) + "@rss.example.com>"
             lastid = refid
         else:
             refid = lastid.split()[-1]
@@ -507,9 +466,9 @@ class Item:
             return createTextEmail (text_version, headers, encoding)
         else:
             if( format == "html" ):
-                return createhtmlmail (html_version, '', headers, images, None, self.link, encoding)
+                return createHtmlMail (cache, html_version, '', headers, images, None, self.link, encoding)
             else: # multipart
-                return createhtmlmail (html_version, text_version, headers, images, None, self.link, encoding)
+                return createHtmlMail (cache, html_version, text_version, headers, images, None, self.link, encoding)
 
 
 
@@ -725,7 +684,7 @@ def CargarHistoricos(name):
     if isinstance(name, unicode):
         name = name.encode('latin1', 'replace')
 
-    data_dir = os.path.normpath(os.path.join(GetHomeDir(), '.newspipe/data'))
+    data_dir = os.path.normpath(os.path.join(HOME, '.newspipe/data'))
 
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -778,7 +737,7 @@ def GrabarHistorico(dicc, name, extension):
     if isinstance(name, unicode):
         name = name.encode('latin1', 'replace')
 
-    data_dir = os.path.normpath(os.path.join(GetHomeDir(), '.newspipe/data'))
+    data_dir = os.path.normpath(os.path.join(HOME, '.newspipe/data'))
 
     mylog.debug('Saving archive '+name+extension)
     dump(dicc, open(os.path.join(data_dir, name + extension +'.new'), 'w'))
@@ -882,15 +841,15 @@ class FeedWorker (_threading.Thread):
                 xml = None
                 try:
                     xml = cache.feed_parse(url, config['can_pipe'] == '1', username, password)
-                except socket.timeout:
+                except cache.SocketTimeoutError:
                     mylog.info ('Timeout error downloading %s' % url)
                     mylog.debug ('Will retry in the the next pass')
                     continue
-                except HTTPError, e:
+                except cache.HTTPError, e:
                     mylog.info ('HTTP Error %d downloading %s' % (e.code, url,))
-                except URLError, e:
+                except cache.URLError, e:
                     mylog.info ('URLError (%s) downloading %s' % (e.reason, url,))
-                except OfflineError:
+                except cache.OfflineError:
                     mylog.info ('Resource unavailable when offline (%s)' % url)
                 except Exception, e:
                     mylog.exception ('Error %s downloading %s' % (str(e), url))
@@ -1000,7 +959,6 @@ class FeedWorker (_threading.Thread):
     
 
 
-log = None
 
 def setPriority (priority):
     # 0 = Low priority
@@ -1018,9 +976,9 @@ def setPriority (priority):
                 kernel32 = ctypes.windll.kernel32
                 thread = kernel32.GetCurrentThread()
                 kernel32.SetThreadPriority(thread, -15)
-                log.debug ("Thread priority lowered.")
+                mylog.debug ("Thread priority lowered.")
             except ImportError:
-                log.error ('CTypes module is not available. The parameter "priority" will be ignored')
+                mylog.error ('CTypes module is not available. The parameter "priority" will be ignored')
                 pass
         else:
             raise NotImplementedError ('Priority settings only implemented in Windows')
@@ -1032,8 +990,8 @@ def MainLoop():
     global post_history
     global feed_history
     global cache
-    global log
     global DEBUG
+
 
     semaforo = _threading.BoundedSemaphore()
     feed_history, post_history = None, None
@@ -1043,17 +1001,16 @@ def MainLoop():
 
         DEBUG = config['debug'] == '1'
 
-        if not log:
-            log_dir = os.path.normpath(os.path.join(GetHomeDir(), '.newspipe/log'))
-            log = LogFile(config['log_console']  == '1', 'newspipe', log_dir, DEBUG)
-    
+        log_dir = os.path.normpath(os.path.join(HOME, '.newspipe/log'))
+        mylog.logFile(config['log_console']  == '1', 'newspipe', log_dir, DEBUG)
+        
         gc.collect()
 
         if DEBUG:
             mylog.warning ('DEBUG MODE')
     
 
-        mylog.debug ('Home directory: '+GetHomeDir())
+        mylog.debug ('Home directory: ' + HOME)
 
         try:
             mylog.debug ('Configuration settings:')
@@ -1076,7 +1033,7 @@ def MainLoop():
                 NUM_WORKERS = int(config['workers'])
 
                 if not has_threading:
-                    log.warning ('Running without threads support')
+                    mylog.warning ('Running without threads support')
                     NUM_WORKERS = 1
 
                 filename = config['opml']
@@ -1090,9 +1047,9 @@ def MainLoop():
                             break
 
                     fp = cache.urlopen(filename, max_age=60, can_pipe=False).content
-                    opml = AplanarArbol(ParseOPML(fp), OPML_DEFAULTS)
+                    opml = flatten_tree(ParseOPML(fp), OPML_DEFAULTS)
                     mylog.debug ('Processing file: '+filename)
-                except URLError:
+                except cache.URLError:
                     mylog.error ('Cannot find the opml file: '+filename)
                     opml = None
                 except:
@@ -1117,20 +1074,20 @@ def MainLoop():
                     feeds_queue = Queue.Queue(0)
                     email_queue = Queue.Queue(0)
 
-                    log.debug ('Inserting the feeds into the pending queue')
+                    mylog.debug ('Inserting the feeds into the pending queue')
                     for feed in opml['body']:
                         if feed['active'] == '1':
                             feeds_queue.put(feed)
                         else:
-                            log.debug ('Ignoring the Inactive feed: '+feed['xmlUrl'])
+                            mylog.debug ('Ignoring the Inactive feed: '+feed['xmlUrl'])
                 
 
-                    log.debug ('Inserting the end-of-work markers in the queue')
+                    mylog.debug ('Inserting the end-of-work markers in the queue')
                     for x in range(NUM_WORKERS):
                         feeds_queue.put(None)
                 
 
-                    log.debug ('Starting working threads')
+                    mylog.debug ('Starting working threads')
                     workers = []
                     for x in range(NUM_WORKERS):
                         w = FeedWorker (feeds_queue, email_queue, config, email_destino, movil_destino, semaforo)
@@ -1138,12 +1095,12 @@ def MainLoop():
                         w.start()
                 
 
-                    log.debug ('Waiting for all the threads to finish')
+                    mylog.debug ('Waiting for all the threads to finish')
                     for w in workers:
                         w.join()
                 
 
-                    log.debug ('Extracting the emails from the results queue')
+                    mylog.debug ('Extracting the emails from the results queue')
                     emails = []
                     while True:
                         try:
@@ -1213,10 +1170,16 @@ def MainLoop():
 
 
 if __name__ == '__main__':
-    log = None
-    mylog=MyLog()
 
-    cache_dir = os.path.normpath(os.path.join(GetHomeDir(), '.newspipe/cache'))
+    HOME = None
+    for name in ('appdata', 'HOME'):
+        HOME = HOME or os.environ.get(name, None)
+
+    # if it can't find the home directory trough environment vars, then 
+    # return the path to this script.
+    HOME = HOME or os.path.split(sys.argv[0])[0]
+
+    cache_dir = os.path.normpath(os.path.join(HOME, '.newspipe/cache'))
     cache = Cache(cache_dir, agent=USER_AGENT)
     try:
         MainLoop()

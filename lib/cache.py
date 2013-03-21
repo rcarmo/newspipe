@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import os
 import os.path
 from urlparse import urlparse, urlunparse
-from urllib2 import urlopen, Request, HTTPError
+from urllib2 import urlopen, Request, HTTPError, URLError
 import email.Utils
 import gzip
 import StringIO
@@ -24,7 +24,6 @@ import stat
 import Queue
 import time
 from os import popen
-from urllib2 import URLError
 import base64
 
 try:
@@ -88,6 +87,12 @@ class Cache:
         self.offline = offline
         self.debug = debug
         self.location = os.path.abspath(location)
+
+        self.OfflineError = OfflineError
+        self.HTTPError = HTTPError
+        self.URLError = URLError
+        self.SocketError = socket.error
+        self.SocketTimeoutError = socket.timeout
 
         try:
             os.makedirs(self.location)

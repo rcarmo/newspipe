@@ -1,10 +1,15 @@
 import os, sys, logging
 import cStringIO
 import MimeWriter, mimetools, email
+import socket
+from urllib2 import HTTPError, URLError
+import urlparse 
+import base64
+from log import mylog
 
 log = logging.getLogger()
 
-def createhtmlmail(cache, html, text, headers, images=None, rss_feed=None, link=None, encoding='utf-8'):
+def createHtmlMail(cache, html, text, headers, images=None, rss_feed=None, link=None, encoding='utf-8'):
     """Create a mime-message that will render HTML in popular MUAs, text in better ones"""
 
     if not isinstance(text, unicode):
@@ -106,7 +111,7 @@ def createhtmlmail(cache, html, text, headers, images=None, rss_feed=None, link=
                     # in case of Timeout or URLError exceptions, retry up to 3 times
                     try:
                         resource = cache.urlopen(x['url'], max_age=999999, referer=img_referer, can_pipe=False)
-                    except HTTPError, e:
+                    except cache.HTTPError, e:
                         # in case of HTTP error 403 ("Forbiden") retry without the Referer
                         if e.code == 403 and img_referer:
                             mylog.info ('HTTP error 403 downloading %s, retrying without the referer' % (x['url'],))
@@ -114,12 +119,12 @@ def createhtmlmail(cache, html, text, headers, images=None, rss_feed=None, link=
                         else:
                             raise
                     
-                    except (socket.timeout, socket.error):
+                    except (cache.SocketTimeoutError, cache.SocketError):
                         mylog.info ('Timeout error downloading %s' % (x['url'],))
                         if retries == MAX_RETRIES:
                             raise
                     
-                    except URLError, e:
+                    except cache.URLError, e:
                         mylog.info ('URLError (%s) downloading %s' % (e.reason, x['url'],))
                         if retries == MAX_RETRIES:
                             raise
@@ -158,16 +163,16 @@ def createhtmlmail(cache, html, text, headers, images=None, rss_feed=None, link=
                 image_ok = True  # the image was downloaded ok
             except KeyboardInterrupt:
                 raise
-            except socket.timeout:
+            except cache.SocketTimeoutError:
                 mylog.info ('Timeout error downloading %s' % (x['url'],))
                 image_ok = False
-            except HTTPError, e:
+            except cache.HTTPError, e:
                 mylog.info ('HTTP Error %d downloading %s' % (e.code, x['url'],))
                 image_ok = False
-            except URLError, e:
+            except cache.URLError, e:
                 mylog.info ('URLError (%s) downloading %s' % (e.reason, x['url'],))
                 image_ok = False
-            except OfflineError:
+            except cache.OfflineError:
                 mylog.info ('Resource unavailable when offline (%s)' % x['url'])
                 image_ok = False
             except Exception, e:

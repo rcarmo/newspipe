@@ -1,3 +1,6 @@
+import re
+from htmlentitydefs import  *
+
 def intEnt(m):
     m = int(m.groups(1)[0])
     return unichr(m)
